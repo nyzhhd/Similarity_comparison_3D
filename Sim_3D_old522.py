@@ -14,6 +14,8 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.distance import cdist
 from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
+import numpy as np
+from sklearn.cluster import DBSCAN
 
 
 # base_path = '/home/lzy/BoltLoose'   # 部署时需要修改该路径
@@ -21,106 +23,48 @@ from sklearn.cluster import DBSCAN
 
 class Sim_3D():
     def __init__(self):
-        self.height = 1200  # 图片高度
-        self.width = 1920  # 图片宽度
+        self.height = 1200           # 图片高度
+        self.width = 1920            # 图片宽度
         self.length = 3 * self.height * self.width   # 图片数据长度
         self.p = 0.1                 #  图片存储精度 点云文件与真实坐标之间的比例系数
         self.Sampling_interval = 4   # 点云降采样系数
         self.XYZ_Name=''
         self.kdtree=[]
+ 
+       
+    def readxyz1(self,Image_XYZ_Name, box, p, Sampling_interval):
+        point_depth = []
+        fd = open(Image_XYZ_Name, "rb")                # 打开文件
+        file = fd.read()                                    # 文件尾为空字串
+        data = []                                           # 创建列表存储.data文件
+        for cell in struct.unpack('%dH' % self.length, file):  # 转换二进制数据
+            data.append(cell)                               # 写入二进制数据
+        depth_map = np.array(data, dtype=np.uint16).reshape((self.height, self.width, 3), order="C")
+        fd.close()                                          # 关闭文件流   
 
-    def readxyz_full(self, img_path1, img_path2):
-        # 使用内存映射读取文件
-        try:
-            # 计算映射大小和偏移
-            dtype = np.dtype(np.uint16)
-            offset = dtype.itemsize * self.width * self.height * 3  # 根据文件格式调整
-            xyz_path1 = os.path.splitext(img_path1)[0] + '.xyz'
-            exists = self.check_file_exists_with_timeout(xyz_path1)
-            if exists:
-                # print("xyz文件存在")
-                pass
-            else:
-                print("xyz文件不存在或超时")
-                return
-            xyz_path2 = os.path.splitext(img_path2)[0] + '.xyz'
-            exists = self.check_file_exists_with_timeout(xyz_path2)
-            if exists:
-                pass
-                # print("xyz文件存在")
-            else:
-
-                print("xyz文件不存在或超时")
-                return
-            with open(xyz_path1, "rb") as fd:
-                fd.seek(0, 2)  # 移动到文件末尾
-                file_size = fd.tell()
-                assert file_size >= offset, "文件大小不匹配"
-                # 创建内存映射
-                mm = np.memmap(fd, dtype=dtype, mode='r', shape=(self.height, self.width, 3), order="C")
-            self.std_mm = mm
-            with open(xyz_path2, "rb") as fd:
-                fd.seek(0, 2)  # 移动到文件末尾
-                file_size = fd.tell()
-                assert file_size >= offset, "文件大小不匹配"
-                # 创建内存映射
-                mm = np.memmap(fd, dtype=dtype, mode='r', shape=(self.height, self.width, 3), order="C")
-            self.test_mm = mm
-        except Exception as e:
-            print(f"读取文件失败: {e}")
-            self.mm = None
-            self.std_mm = None
-            self.test_mm = None
-
-    def get_pcl(self, box , mm = None ,p=0.1, Sampling_interval=16):
-        """
-        从内存映射中提取特定区域内的点云数据。
-
-        参数:
-        box (tuple): 定义提取区域的边界框 (xmin, ymin, xmax, ymax, _, _)。
-        p (float): 比例因子，默认为 0.1。
-        Sampling_interval (int): 采样间隔，默认为 4。
-
-        返回:
-        valid_points (numpy.ndarray): 提取的有效点云数据。
-        """
-        if mm is None:
-            print("mm is None")
-            return None
-        # 转换为3D点云，只读取box范围内的
-        xmin, ymin, xmax, ymax = box
-        xmin = max(0, xmin)
-        ymin = max(0, ymin)
-        xmax = min(self.width - 1, xmax)
-        ymax = min(self.height - 1, ymax)
-        y_indices = np.arange(ymin, ymax, Sampling_interval, dtype=int)
-        x_indices = np.arange(xmin, xmax, Sampling_interval, dtype=int)
-
-        # 构建网格索引
-        y_grid, x_grid = np.meshgrid(y_indices, x_indices, indexing='ij')
-        depth_points = mm[y_grid, x_grid].reshape(-1, 3) * p
-        # print('mm',mm)
-        # print(y_grid, x_grid)
-
-        # 过滤无效点（假设深度值为0表示无效点）
-        valid_points = depth_points[depth_points[:, 2] != 0]
-        # 计算框中间的点云数据的 z 值的平均值
-        # 计算框中间的点云数据的 z 值的平均值
-        center_x = int((xmin + xmax) // 2)
-        center_y = int((ymin + ymax) // 2)
-        center_depth = mm[center_y, center_x] * p
-
-        # 如果中心点深度值有效，则计算平均值
-        if center_depth[2] != 0:
-            z_mean = center_depth[2]
-        else:
-            z_mean = 0  # 如果中心点无效，则返回 None
-
-        print(z_mean)
-
-        return valid_points,z_mean
+        # 转换为3d点云，只读取box范围内的
+        inited = False
+        xmin, ymin, xmax, ymax, _, _ = box
+        for y in range(int(ymin), int(ymax), Sampling_interval):
+            for x in range(int(xmin), int(xmax), Sampling_interval):
+                depth_x = depth_map[y][x][0]*p               # 获取深度坐标x
+                depth_y = depth_map[y][x][1]*p               # 获取深度坐标y
+                depth_z = depth_map[y][x][2]*p               # 获取深度坐标z
+                if depth_z!=0:    # 判断无效点
+                    if not inited:
+                        point_cloud = np.array([[depth_x,depth_y,depth_z]])
+                        inited = True
+                    else:
+                        point_cloud = np.row_stack((point_cloud, [depth_x,depth_y,depth_z]))
+                
+            try:
+                point_cloud    # 判断点云是否存在，如果螺栓区域所有点云点都无效，则point_cloud不存在
+            except NameError:
+                point_cloud = []  # 定义一个空列表，防止变量不存在时，函数返回报错
+                
+        return point_cloud
     
-    def readxyz(self, Image_XYZ_Name, box, p=0.1, Sampling_interval=16):
+    def readxyz(self, Image_XYZ_Name, box, p=0.1, Sampling_interval=4):
         #改进的读取点云的函数，可以节省很多时间
         # 使用内存映射读取文件
         with open(Image_XYZ_Name, "rb") as fd:
@@ -130,16 +74,12 @@ class Sim_3D():
             fd.seek(0, 2)  # 移动到文件末尾
             file_size = fd.tell()
             assert file_size >= offset, "文件大小不匹配"
+
             # 创建内存映射
             mm = np.memmap(fd, dtype=dtype, mode='r', shape=(self.height, self.width, 3), order="C")
-            self.mm = mm
 
         # 转换为3D点云，只读取box范围内的
-        xmin, ymin, xmax, ymax = box
-        xmin=max(0,xmin)
-        ymin=max(0,ymin)
-        xmax=min(self.width-1,xmax)
-        ymax=min(self.height-1,ymax)
+        xmin, ymin, xmax, ymax, _, _ = box
         y_indices = np.arange(ymin, ymax, Sampling_interval, dtype=int)
         x_indices = np.arange(xmin, xmax, Sampling_interval, dtype=int)
 
@@ -185,127 +125,61 @@ class Sim_3D():
         return matching_indice1, matching_indice2
 
 
-    def check_file_exists_with_timeout(self, file_path, timeout=2):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if os.path.exists(file_path) and os.path.getsize(file_path)>13*1024*1024:
-                return True  # 文件存在
-            time.sleep(0.1)  # 等待100毫秒再检查
-        return False  # 超时，文件不存在
-    def elbox(self,box,rate=0.1):
-        box_el = [0, 0, 0, 0]
-        w, h = abs(box[2] - box[0]), abs(box[3] - box[1])
-        box_el[0], box_el[2] = box[0] - rate * w, box[2] + rate * w
-        box_el[1], box_el[3] = box[1] - rate * h, box[3] + rate * h
-        return box_el
-    
-    def abnorm_detect_3D(self, img_path1, box1, img_path2, box2, thresh=0.7, Sampling_interval =2):
 
-        # # 开始总时间记录
-        # if "TCGJ" in img_path1:
-        #     pass
-            
-        # else:
-        #     box1 = self.elbox(box1)
-        
-        box1 = self.elbox(box1)
-        box1 = self.elbox(box1)
+    def abnorm_detect_3D(self, img_path1, box1, img_path2, box2, thresh_distance,Sampling_interval = 4):
+        # img_path1 应该是标准图的路径，是标准的
+        # img_path2 应该是待检测图像的路径，可能是异常的，可能是正常的
+        # 相似度检测过程中img_path1和img_path2不建议调换
+
+        # 开始总时间记录
+        total_start_time = time.time()
         self.Sampling_interval=Sampling_interval
+        mean_distance=-1
+
         #---------------------获取第一个数据的点云-----------------------------
         start_time = time.time()
+        xyz_path1 = os.path.splitext(img_path1)[0]+'.xyz'
+        point_cloud1= self.readxyz(xyz_path1, box1, self.p, self.Sampling_interval)
+        file_name1 = os.path.splitext(os.path.basename(img_path1))[0]  # 不含后缀的文件名
+        read_time1 = time.time() - start_time
+        if len(point_cloud1) == 0:
+            print('该区域点云无效')
+            return 0,-1
 
-        try:
-            first_point_cloud, first_z_mean= self.get_pcl(box1, self.std_mm ,self.p, self.Sampling_interval)
-            file_name1 = os.path.splitext(os.path.basename(img_path1))[0]  # 不含后缀的文件名
-            read_time1 = time.time() - start_time
-            if len(first_point_cloud) == 0:
-                print('该区域点云无效')
-                return 0,-1
-
-            #---------------------获取第二个数据的点云-----------------------------
-            start_time = time.time()
-
-            second_point_cloud, second_z_mean= self.get_pcl(box2, self.test_mm , self.p, self.Sampling_interval)
-            file_name2 = os.path.splitext(os.path.basename(img_path2))[0]  # 不含后缀的文件名
-            read_time2 = time.time() - start_time
-            if len(second_point_cloud) == 0:
-                print('该区域点云无效')
-                return 0,-1 ,100
-        except:
-
-            return 0,-1,100
+        #---------------------获取第二个数据的点云-----------------------------
+        start_time = time.time()
+        xyz_path2 = os.path.splitext(img_path2)[0]+'.xyz'
+        point_cloud2= self.readxyz(xyz_path2, box2, self.p, self.Sampling_interval)
+        file_name2 = os.path.splitext(os.path.basename(img_path2))[0]  # 不含后缀的文件名
+        read_time2 = time.time() - start_time
+        if len(point_cloud2) == 0:
+            print('该区域点云无效')
+            return 0,-1
 
         #---------------------预处理点云数据-----------------------------
         start_time = time.time()
-        # np.set_printoptions(threshold=np.inf, linewidth=np.inf)
-        # print(second_point_cloud)
-        first_point_cloud=self.filter_pcd(first_point_cloud,first_z_mean)#滤除噪点
-        second_point_cloud=self.filter_pcd(second_point_cloud, second_z_mean)#滤除噪点 
-        
-
-        point_cloud1 = o3d.geometry.PointCloud()
-        point_cloud1.points = o3d.utility.Vector3dVector(
-            first_point_cloud)  # 用实际数据替换first_point_cloud
-        # 创建第二个点云对象并设置点坐标
-        point_cloud2 = o3d.geometry.PointCloud()
-        point_cloud2.points = o3d.utility.Vector3dVector(
-            second_point_cloud)  # 用实际数据替换second_point_cloud
-  
-        # 为点云设置颜色
-        color_cloud1 = [[1, 0, 0] for i in range(len(point_cloud1.points))]  # 点云1的颜色为红色
-        point_cloud1.colors = o3d.utility.Vector3dVector(color_cloud1)
-        color_cloud2 = [[0, 0, 1] for i in range(len(point_cloud2.points))]  # 点云2的颜色为蓝色
-        point_cloud2.colors = o3d.utility.Vector3dVector(color_cloud2)
-
-
-        # 平移点云2使其中心与点云1对齐
-        point1_center = (point_cloud1.get_center())
-        point2_center = (point_cloud2.get_center())
-        translation = point1_center - point2_center
-        point_cloud2.translate(translation)
-
-        # 可视化初步对齐的点云
-        # o3d.visualization.draw_geometries([point_cloud1, point_cloud2],window_name='Initial Alignment')
-
-        # 第一次ICP配准 - 大尺度配准
-        icp_result = o3d.pipelines.registration.registration_icp(
-            point_cloud1, point_cloud2, max_correspondence_distance=15,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50))
-        point_cloud1.transform(icp_result.transformation)
-        # print("ICP Result 1 - Fitness:", icp_result.fitness)
-
-        # 第二次ICP配准 - 中尺度配准
-        icp_result = o3d.pipelines.registration.registration_icp(
-            point_cloud1, point_cloud2, max_correspondence_distance=2,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50))
-        point_cloud1.transform(icp_result.transformation)
-        # print("ICP Result 2 - Fitness:", icp_result.fitness)
-
-        # 第三次ICP配准 - 小尺度配准
-        icp_result = o3d.pipelines.registration.registration_icp(
-            point_cloud1, point_cloud2, max_correspondence_distance=1,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint()                ,
-            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50))
-        point_cloud1.transform(icp_result.transformation)
-        # print("ICP Result 3 - Fitness:", icp_result.fitness)
-
-        _, simdis = self.mean_nearest_distance(np.asarray(point_cloud2.points), np.asarray(point_cloud1.points))
-        print("配准点云距离 simdis: ", simdis )
-
-        o3d.visualization.draw_geometries([point_cloud1, point_cloud2],window_name='Final Alignment')
-
-        icp = icp_result.fitness
-        icp = round(icp,3)
-        
+        point_cloud1, point_cloud2 = self.center_point_clouds(point_cloud1, point_cloud2)#中心对齐
+        point_cloud1=self.filter_pcd(point_cloud1)#滤除噪点
+        point_cloud2=self.filter_pcd(point_cloud2)#滤除噪点  
         preprocess_time = time.time() - start_time
 
+
+        #-----作为对比进行显示，真实使用过程中进行屏蔽-----
+        # similarity,mean_distance = self.mean_nearest_distance(point_cloud1, point_cloud2)
+        # print("-----配准前的平均距离------", mean_distance)
+        # self.draw_pcd(point_cloud1, point_cloud2)
+
+        
+        #---------------------比较两个点云的相似度-----------------------------
+        start_time = time.time()
+        point_cloud1, point_cloud2, icp_mean_error,_ = self.align_point_clouds(point_cloud1, point_cloud2)
+        similarity_time = time.time() - start_time
+        print("-----配准后的平均距离------", icp_mean_error)
 
         #-------------------------记录时间----------------------------------------
         # 总耗时
         #total_time = time.time() - total_start_time
-        total_time =read_time1+read_time2+preprocess_time
+        total_time =read_time1+read_time2+preprocess_time+similarity_time
         # 写入文件
         with open("time_stats.txt", "a", encoding='utf-8') as file:  # 使用追加模式和UTF-8编码
             current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -315,13 +189,20 @@ class Sim_3D():
             file.write(f"读取点云1时间: {read_time1}s\n")
             file.write(f"读取点云2时间: {read_time2}s\n")
             file.write(f"预处理时间: {preprocess_time}s\n")
+            file.write(f"相似度计算时间: {similarity_time}s\n")
+            file.write(f"点云1点数: {len(point_cloud1)}\n")
+            file.write(f"点云2点数: {len(point_cloud2)}\n")
+            file.write(f"配准前的平均距离: {mean_distance}\n")
+            file.write(f"配准后的平均距离: {icp_mean_error}\n")
             file.write(f"总耗时: {total_time}s\n")
 
-        # print("----配准相似度------", icp)
-        if icp > thresh:
-            return 1 , icp ,simdis #1：点云相似度高，可认为大概率无缺陷
+        #-------------------------绘制点云----------------------------------------
+        self.draw_pcd(point_cloud1, point_cloud2) #实际过程中无需绘制
+
+        if icp_mean_error < thresh_distance:
+            return 1 ,icp_mean_error#1：点云平均距离相差较小，可认为大概率无缺陷
         else:
-            return 2 , icp ,simdis #2：点云相似度低，可认为大概率有缺陷
+            return 2 ,icp_mean_error #2：点云平均距离相差较大，可认为大概率有缺陷
 
 
     def draw_pcd(self,point_cloud1,point_cloud2):
@@ -361,9 +242,14 @@ class Sim_3D():
         vis.run()
         vis.destroy_window()
 
+    
+    
+            
+   
 
-    def filter_and_cluster_pcd(self, point_cloud, z_threshold=30, edge_threshold=0.1, cluster_tol=0.1):
+    def filter_pcd(self, point_cloud, z_threshold=30, edge_threshold=0.1, eps=1, min_samples=9):
         # 将点云转换为Open3D点云对象
+        import colorsys
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(point_cloud)
 
@@ -371,9 +257,9 @@ class Sim_3D():
         pcd = pcd.select_by_index(np.where(np.asarray(pcd.points)[:, 2] < z_threshold)[0])
 
         # 统计滤波去除噪声
-        nb_neighbors = 10  # 邻域内的点数，可以根据需要调整
+        nb_neighbors = 50  # 邻域内的点数
         std_ratio = 2.0    # 标准差倍数
-        statistical_filtered = pcd.remove_statistical_outlier(nb_neighbors, std_ratio)[0]
+        statistical_filtered, _ = pcd.remove_statistical_outlier(nb_neighbors, std_ratio)
 
         # 转换为numpy数组
         filtered_points = np.asarray(statistical_filtered.points)
@@ -386,65 +272,75 @@ class Sim_3D():
             np.all(filtered_points < max_bound, axis=1)
         ]
 
-        # 将过滤后的点转换回Open3D点云对象
-        filtered_pcd = o3d.geometry.PointCloud()
-        filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+        # 使用DBSCAN进行聚类
+        clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(filtered_points)
+        labels = clustering.labels_
 
-        # 应用欧式聚类算法
-        labels = np.array(filtered_pcd.cluster_dbscan(eps=cluster_tol, min_points=2, print_progress=False))
+        # 找出所有聚类（不包括噪声点）
+        unique_labels = np.unique(labels)
+        unique_labels = unique_labels[unique_labels != -1]
+        
+        # 如果没有找到聚类，返回所有点
+        if len(unique_labels) == 0:
+            print("Warning: No clusters found. Returning all points.")
+            return filtered_points
 
-        # 找到最大聚类
-        unique_labels, counts = np.unique(labels, return_counts=True)
-        max_cluster_label = unique_labels[np.argmax(counts)]
+        # 为每个聚类生成不同的颜色
+        num_clusters = len(unique_labels)
+        colors = [colorsys.hsv_to_rgb(i / num_clusters, 1, 1) for i in range(num_clusters)]
+        color_map = dict(zip(unique_labels, colors))
+        
+        # 为噪声点指定颜色（灰色）
+        color_map[-1] = (0.7, 0.7, 0.7)
 
-        # 根据最大聚类的标签过滤点云
-        max_cluster_pcd = filtered_pcd.select_by_index(labels == max_cluster_label)
+        # 为每个点分配颜色
+        point_colors = np.array([color_map[label] for label in labels])
 
-        return np.asarray(max_cluster_pcd.points)
+        # 可视化
+        # 原始点云
+        pcd_original = o3d.geometry.PointCloud()
+        pcd_original.points = o3d.utility.Vector3dVector(point_cloud)
+        pcd_original.paint_uniform_color([0.5, 0.5, 0.5])  # 深灰色
 
+        # 聚类后的点云
+        pcd_clustered = o3d.geometry.PointCloud()
+        pcd_clustered.points = o3d.utility.Vector3dVector(filtered_points)
+        pcd_clustered.colors = o3d.utility.Vector3dVector(point_colors)
 
-
-
-    def filter_pcd(self, point_cloud, z_mean, z_threshold=50, edge_threshold=0.5, nb_neighbors=20, std_ratio=1):
-        # 将点云转换为Open3D点云对象
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(point_cloud)
-
-        # 滤除深度太远的点
-        # pcd = pcd.select_by_index(np.where(np.asarray(pcd.points)[:, 2] < z_threshold)[0])
-        # pcd = pcd.select_by_index(np.where(np.asarray(pcd.points)[:, 2] - z_mean > z_threshold)[0])
-        valid_indices = np.where(
-            (np.abs(np.asarray(pcd.points)[:, 2] - z_mean) < z_threshold)
-        )[0]
-        pcd = pcd.select_by_index(valid_indices)
-
-        # 统计滤波去除噪声
-        statistical_filtered = pcd.remove_statistical_outlier(nb_neighbors, std_ratio)[0]
-
-        # 转换为numpy数组
-        filtered_points = np.asarray(statistical_filtered.points)
-
-        # 检查filtered_points是否为空
-        if filtered_points.size == 0:
-            return point_cloud
-            
-
-        # 滤除边缘点
-        min_bound = filtered_points.min(axis=0) + edge_threshold
-        max_bound = filtered_points.max(axis=0) - edge_threshold
-        filtered_points = filtered_points[
-            np.all(filtered_points > min_bound, axis=1) &
-            np.all(filtered_points < max_bound, axis=1)
-        ]
-
-        # 再次检查filtered_points是否为空
-        if filtered_points.size == 0:
-            return point_cloud
-
+        # 可视化
+        o3d.visualization.draw_geometries([pcd_original, pcd_clustered],
+                                        window_name="Point Cloud Clustering",
+                                        width=800, height=600)
 
         return filtered_points
+    # def filter_pcd(self, point_cloud, z_threshold=30, edge_threshold=0.1):
+    #     # 将点云转换为Open3D点云对象
+    #     pcd = o3d.geometry.PointCloud()
+    #     pcd.points = o3d.utility.Vector3dVector(point_cloud)
+
+    #     # 滤除深度太远的点
+    #     # print(np.asarray(pcd.points)[:, 2])
+    #     pcd = pcd.select_by_index(np.where(np.asarray(pcd.points)[:, 2] < z_threshold)[0])
+
+    #     # 统计滤波去除噪声
+    #     nb_neighbors = 50  # 邻域内的点数
+    #     std_ratio = 2.0    # 标准差倍数
+    #     statistical_filtered = pcd.remove_statistical_outlier(nb_neighbors, std_ratio)[0]
+
+    #     # 转换为numpy数组
+    #     filtered_points = np.asarray(statistical_filtered.points)
+
+    #     # 滤除边缘点
+    #     min_bound = filtered_points.min(axis=0) + edge_threshold
+    #     max_bound = filtered_points.max(axis=0) - edge_threshold
+    #     filtered_points = filtered_points[
+    #         np.all(filtered_points > min_bound, axis=1) &
+    #         np.all(filtered_points < max_bound, axis=1)
+    #     ]
+
+    #     return filtered_points
     
-    def center_point_clouds(self,pc1, pc2):
+    def center_point_clouds2(self,pc1, pc2):
         # 将两个点云的中心对齐。
         center1 = np.mean(pc1, axis=0)
         center2 = np.mean(pc2, axis=0)
@@ -455,7 +351,7 @@ class Sim_3D():
 
         return center_aligned_pc1, center_aligned_pc2
     
-    def center_point_clouds2(self,pc1, pc2):
+    def center_point_clouds(self,pc1, pc2):
         # 将两个点云的中心对齐。
         center1 = np.mean(pc1, axis=0)
         center2 = np.mean(pc2, axis=0)
